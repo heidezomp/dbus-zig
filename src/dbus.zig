@@ -26,6 +26,12 @@ pub const Connection = struct {
         const socket = try std.net.connectUnixSocket(path);
         errdefer socket.close();
 
+        // Perform authentication
+        try socket.writeAll("\x00AUTH EXTERNAL 31303030\r\n");
+        var buffer: [100]u8 = undefined;
+        const amt = try socket.read(&buffer);
+        std.log.debug("auth response: {}", .{buffer[0..amt]});
+
         return Connection{ .socket = socket };
     }
 
