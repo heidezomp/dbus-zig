@@ -1,2 +1,7 @@
 # dbus-zig
-Work in progress D-Bus client library written in Zig
+
+Trying to build a D-Bus client library written in pure Zig.
+
+## Status
+
+There's nothing substantial to see here yet.
