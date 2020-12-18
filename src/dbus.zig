@@ -33,7 +33,10 @@ pub const Connection = struct {
         try fbs.writer().print("{}", .{uid});
         try socket.writer().print("\x00AUTH EXTERNAL {x}\r\n", .{fbs.getWritten()});
         const amt = try socket.read(&buffer);
-        std.log.debug("auth response: {}", .{buffer[0..amt]});
+        const response = buffer[0..amt];
+        std.log.debug("auth response: {}", .{response});
+        if (!std.mem.startsWith(u8, response, "OK ")) // Rest of response is server GUID in hex
+            return error.AuthenticationRejected; // TODO Actually check for REJECTED response
 
         return Connection{ .socket = socket };
     }
