@@ -27,8 +27,11 @@ pub const Connection = struct {
         errdefer socket.close();
 
         // Perform authentication
-        try socket.writeAll("\x00AUTH EXTERNAL 31303030\r\n");
+        const uid = std.os.system.getuid();
         var buffer: [100]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buffer);
+        try fbs.writer().print("{}", .{uid});
+        try socket.writer().print("\x00AUTH EXTERNAL {x}\r\n", .{fbs.getWritten()});
         const amt = try socket.read(&buffer);
         std.log.debug("auth response: {}", .{buffer[0..amt]});
 
