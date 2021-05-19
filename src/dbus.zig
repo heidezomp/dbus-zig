@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const Connection = struct {
-    socket: std.fs.File,
+    socket: std.net.Stream,
 
     pub fn connectSessionBus(gpa: *Allocator) !Connection {
         const address = try std.process.getEnvVarOwned(gpa, "DBUS_SESSION_BUS_ADDRESS");
@@ -31,10 +31,10 @@ pub const Connection = struct {
         var buffer: [100]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buffer);
         try fbs.writer().print("{}", .{uid});
-        try socket.writer().print("\x00AUTH EXTERNAL {x}\r\n", .{fbs.getWritten()});
+        try socket.writer().print("\x00AUTH EXTERNAL {}\r\n", .{std.fmt.fmtSliceHexLower(fbs.getWritten())});
         const amt = try socket.read(&buffer);
         const response = buffer[0..amt];
-        std.log.debug("auth response: {}", .{response});
+        std.log.debug("auth response: {s}", .{response});
         if (!std.mem.startsWith(u8, response, "OK ")) // Rest of response is server GUID in hex
             return error.AuthenticationRejected; // TODO Actually check for REJECTED response
 
