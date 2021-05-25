@@ -4,9 +4,9 @@ const Allocator = std.mem.Allocator;
 pub const Connection = struct {
     socket: std.net.Stream,
 
-    pub fn connectSessionBus(gpa: *Allocator) !Connection {
-        const address = try std.process.getEnvVarOwned(gpa, "DBUS_SESSION_BUS_ADDRESS");
-        defer gpa.free(address);
+    pub fn connectSessionBus() !Connection {
+        const address = std.os.getenv("DBUS_SESSION_BUS_ADDRESS") orelse
+            return error.EnvironmentVariableNotFound;
 
         return Connection.connectAddress(address);
     }
