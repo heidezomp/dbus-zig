@@ -27,6 +27,8 @@ pub const Connection = struct {
         errdefer socket.close();
 
         // Perform authentication
+        // We only support the EXTERNAL authentication mechanism, which
+        // authenticates (on unix systems) based on the user's uid
         const uid = std.os.system.getuid();
         var buffer: [100]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buffer);
@@ -34,10 +36,19 @@ pub const Connection = struct {
         try socket.writer().print("\x00AUTH EXTERNAL {}\r\n", .{std.fmt.fmtSliceHexLower(fbs.getWritten())});
         const amt = try socket.read(&buffer);
         const response = buffer[0..amt];
-        std.log.debug("auth response: {s}", .{response});
-        if (!std.mem.startsWith(u8, response, "OK ")) // Rest of response is server GUID in hex
-            return error.AuthenticationRejected; // TODO Actually check for REJECTED response
+        std.log.debug("auth response: «{s}»", .{std.fmt.fmtSliceEscapeLower(response)});
+        if (std.mem.startsWith(u8, response, "OK ")) {
+            // Rest of response is server GUID in hex, which we don't use
+        } else if (std.mem.startsWith(u8, response, "REJECTED ")) {
+            // Rest of response is a list of authentication mechanisms
+            // supported, but we only support EXTERNAL
+            return error.AuthenticationRejected;
+        } else {
+            return error.UnexpectedAuthenticationResponse;
+        }
+        try socket.writer().print("BEGIN\r\n", .{});
 
+        // We are now authenticated and ready to send/receive D-Bus messages
         return Connection{ .socket = socket };
     }
 
