@@ -30,7 +30,7 @@ pub const Connection = struct {
         // We only support the EXTERNAL authentication mechanism, which
         // authenticates (on unix systems) based on the user's uid
         const uid = std.os.system.getuid();
-        var buffer: [100]u8 = undefined; // TODO use some reasonable buffer size (does the spec indicate a limit?); read auth responses until '\r\n' and return OutOfMemory if the response doesn't fit
+        var buffer: [100]u8 = undefined; // TODO use a BufferedReader/BufferedWriter and store them in the Connection
         var fbs = std.io.fixedBufferStream(&buffer);
         try fbs.writer().print("{}", .{uid});
         try socket.writer().print("\x00AUTH EXTERNAL {}\r\n", .{std.fmt.fmtSliceHexLower(fbs.getWritten())});
@@ -48,12 +48,20 @@ pub const Connection = struct {
         }
         try socket.writer().print("BEGIN\r\n", .{});
 
-        // We are now authenticated and ready to send/receive D-Bus messages
-        return Connection{ .socket = socket };
+        // We now have an authenticated connection that is ready to send/receive D-Bus messages
+        var self = Connection{ .socket = socket };
+
+        // Send a Hello message to receive our connection's unique name
+        try self.sendMessage(.{
+            .message_type = .method_call,
+            .serial = 1, // TODO but this should not be determined by the caller, but tracked as Connection state
+        });
+
+        return self;
     }
 
-    pub fn sendMessage(self: Connection) !void {
-        const message =
+    pub fn sendMessage(self: Connection, message: Message) !void {
+        const msg =
             "\x6c\x01\x00\x01\x00\x00\x00\x00\x01\x00\x00\x00\x6e\x00\x00\x00" ++
             "\x01\x01\x6f\x00\x15\x00\x00\x00\x2f\x6f\x72\x67\x2f\x66\x72\x65" ++
             "\x65\x64\x65\x73\x6b\x74\x6f\x70\x2f\x44\x42\x75\x73\x00\x00\x00" ++
@@ -62,7 +70,7 @@ pub const Connection = struct {
             "\x02\x01\x73\x00\x14\x00\x00\x00\x6f\x72\x67\x2e\x66\x72\x65\x65" ++
             "\x64\x65\x73\x6b\x74\x6f\x70\x2e\x44\x42\x75\x73\x00\x00\x00\x00" ++
             "\x03\x01\x73\x00\x05\x00\x00\x00\x48\x65\x6c\x6c\x6f\x00\x00\x00";
-        try self.socket.writer().writeAll(message);
+        try self.socket.writer().writeAll(msg);
 
         // Message header
         // TODO doesn't work; try to replicate the above message and write a test for it once it works
@@ -105,10 +113,27 @@ pub const Connection = struct {
     }
 };
 
-const MessageType = enum(u8) {
-    INVALID = 0,
-    METHOD_CALL = 1,
-    METHOD_RETURN = 2,
-    ERROR = 3,
-    SIGNAL = 4,
+const Message = struct {
+    endian: std.builtin.Endian = std.Target.current.cpu.arch.endian(),
+    message_type: MessageType,
+    flags: MessageFlags = .{},
+    serial: u32,
 };
+
+const MessageType = enum(u8) {
+    method_call = 1,
+    method_return = 2,
+    @"error" = 3,
+    signal = 4,
+};
+
+const MessageFlags = packed struct {
+    no_reply_expected: bool = false,
+    no_auto_start: bool = false,
+    allow_interactive_authorization: bool = false,
+    _padding: u5 = 0,
+};
+
+comptime {
+    std.debug.assert(@bitSizeOf(MessageFlags) == 8);
+}
