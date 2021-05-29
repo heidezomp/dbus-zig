@@ -1,8 +1,17 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const system_bus_address = "unix:path=/var/run/dbus/system_bus_socket";
+
 pub const Connection = struct {
     socket: std.net.Stream,
+
+    pub fn connectSystemBus() !Connection {
+        const address = std.os.getenv("DBUS_SYSTEM_BUS_ADDRESS") orelse
+            system_bus_address;
+
+        return Connection.connectAddress(address);
+    }
 
     pub fn connectSessionBus() !Connection {
         const address = std.os.getenv("DBUS_SESSION_BUS_ADDRESS") orelse
