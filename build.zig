@@ -24,4 +24,8 @@ pub fn build(b: *Builder) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const tests = b.addTest("src/dbus.zig");
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&tests.step);
 }

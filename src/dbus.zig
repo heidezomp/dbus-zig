@@ -125,7 +125,7 @@ const Message = struct { // TODO should a Message struct even exist? maybe just 
 };
 
 fn serializeMessage(
-    writer: Writer,
+    writer: anytype,
     message_type: MessageType,
     message_flags: MessageFlags,
     serial: u32,
@@ -206,7 +206,11 @@ const MessageFlags = packed struct {
     }
 };
 
-test "serializeValue" { // TODO hook up to "zig build test"
+test {
+    std.testing.refAllDecls(@This());
+}
+
+test "serializeValue" {
     var out_buffer: [1024]u8 = undefined;
 
     var stream = std.io.fixedBufferStream(&out_buffer);
