@@ -135,13 +135,14 @@ fn serializeMessage(
 }
 
 fn serializeValue(writer: anytype, position: usize, value: anytype) !usize {
-    const DbusType = @TypeOf(value);
-    var cur_pos = std.mem.alignForward(position, alignOf(DbusType));
+    const T = @TypeOf(value);
+    assertDbusType(T);
+    var cur_pos = std.mem.alignForward(position, alignOf(T));
     var align_bytes = cur_pos - position;
     while (align_bytes != 0) : (align_bytes -= 1) {
         try writer.writeByte(0);
     }
-    switch (DbusType) {
+    switch (T) {
         u8 => {
             try writer.writeByte(value);
             cur_pos += 1;
@@ -151,8 +152,8 @@ fn serializeValue(writer: anytype, position: usize, value: anytype) !usize {
             cur_pos += 4;
         },
         i16, u16, i32, u32, i64, u64 => {
-            try writer.writeIntNative(DbusType, value);
-            cur_pos += @sizeOf(DbusType);
+            try writer.writeIntNative(T, value);
+            cur_pos += @sizeOf(T);
         },
         f64 => {
             try writer.writeAll(std.mem.asBytes(&value));
@@ -165,13 +166,14 @@ fn serializeValue(writer: anytype, position: usize, value: anytype) !usize {
         //Variant => ...
         //DictEntry => ...
         //UnixFd => ...
-        else => @compileError(@typeName(DbusType) ++ " is not a D-Bus type"),
+        else => unreachable,
     }
     return cur_pos;
 }
 
-fn alignOf(comptime DbusType: type) usize {
-    return switch (DbusType) {
+fn alignOf(comptime T: type) usize {
+    assertDbusType(T);
+    return switch (T) {
         u8 => 1,
         bool => 4,
         i16, u16 => 2,
@@ -184,7 +186,44 @@ fn alignOf(comptime DbusType: type) usize {
         //Variant => 1,
         //DictEntry => 8,
         //UnixFd => 4,
-        else => @compileError(@typeName(DbusType) ++ " is not a D-Bus type"),
+        else => unreachable,
+    };
+}
+
+fn Array(comptime T: type) type {
+    assertDbusType(T);
+    return struct {
+        elements: []const T,
+    };
+}
+
+fn assertDbusType(comptime T: type) void {
+    comptime {
+        if (!isDbusType(T)) @compileError(@typeName(T) ++ " is not a D-Bus type");
+    }
+}
+
+fn isDbusType(comptime T: type) bool {
+    return switch (T) {
+        u8,
+        bool,
+        i16,
+        u16,
+        i32,
+        u32,
+        i64,
+        u64,
+        f64,
+        //String,
+        //ObjectPath,
+        //Signature,
+        //Array,
+        //Struct,
+        //Variant,
+        //DictEntry,
+        //UnixFd,
+        => true,
+        else => false,
     };
 }
 
