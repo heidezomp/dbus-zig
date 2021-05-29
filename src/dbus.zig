@@ -79,8 +79,8 @@ pub const Connection = struct {
             .Little => 'l',
             .Big => 'B',
         }));
-        pos = try serializeValue(self.socket.writer(), pos, MessageType.MethodCall.to_byte());
-        pos = try serializeValue(self.socket.writer(), pos, (MessageFlags{}).to_byte());
+        pos = try serializeValue(self.socket.writer(), pos, MessageType.MethodCall.toByte());
+        pos = try serializeValue(self.socket.writer(), pos, (MessageFlags{}).toByte());
         pos = try serializeValue(self.socket.writer(), pos, @as(u8, 1)); // major protocol version
         pos = try serializeValue(self.socket.writer(), pos, @as(u32, 0)); // message body length
         pos = try serializeValue(self.socket.writer(), pos, @as(u32, 1)); // message serial number (non-zero)
@@ -194,7 +194,7 @@ const MessageType = enum(u8) {
     Error = 3,
     Signal = 4,
 
-    fn to_byte(self: MessageType) u8 {
+    fn toByte(self: MessageType) u8 {
         return @enumToInt(self);
     }
 };
@@ -209,7 +209,7 @@ const MessageFlags = packed struct {
         std.debug.assert(@bitSizeOf(@This()) == 8);
     }
 
-    fn to_byte(self: MessageFlags) u8 {
+    fn toByte(self: MessageFlags) u8 {
         const bytes = std.mem.asBytes(&self);
         comptime {
             std.debug.assert(bytes.len == 1);
