@@ -70,7 +70,11 @@ pub const Connection = struct {
             "\x02\x01\x73\x00\x14\x00\x00\x00\x6f\x72\x67\x2e\x66\x72\x65\x65" ++
             "\x64\x65\x73\x6b\x74\x6f\x70\x2e\x44\x42\x75\x73\x00\x00\x00\x00" ++
             "\x03\x01\x73\x00\x05\x00\x00\x00\x48\x65\x6c\x6c\x6f\x00\x00\x00";
-        try self.socket.writer().writeAll(msg);
+        //try self.socket.writer().writeAll(msg);
+
+        var position: usize = 0;
+        position = try serializeValue(self.socket.writer(), position, @as(u8, 'l'));
+        std.log.debug("new position = {}", .{position});
 
         // Message header
         // TODO doesn't work; try to replicate the above message and write a test for it once it works
@@ -113,12 +117,76 @@ pub const Connection = struct {
     }
 };
 
-const Message = struct {
+const Message = struct { // TODO should a Message struct even exist? maybe just have a serializeMessage function with arguments? or more generic: serializeValue for serializing a single D-Bus value?
     endian: std.builtin.Endian = std.Target.current.cpu.arch.endian(),
     message_type: MessageType,
     flags: MessageFlags = .{},
     serial: u32,
 };
+
+fn serializeMessage(
+    writer: Writer,
+    message_type: MessageType,
+    message_flags: MessageFlags,
+    serial: u32,
+    header_fields: Array(Struct(.{ Byte, Variant })),
+) void {
+    std.debug.assert(serial != 0);
+}
+
+fn serializeValue(writer: anytype, position: usize, value: anytype) !usize {
+    const DbusType = @TypeOf(value);
+    var cur_pos = std.mem.alignForward(position, alignOf(DbusType));
+    var align_bytes = cur_pos - position;
+    while (align_bytes != 0) : (align_bytes -= 1) {
+        try writer.writeByte(0);
+    }
+    switch (DbusType) {
+        u8 => {
+            try writer.writeByte(value);
+            cur_pos += 1;
+        },
+        bool => {
+            try writer.writeIntNative(u32, @boolToInt(value));
+            cur_pos += 4;
+        },
+        i16, u16, i32, u32, i64, u64 => {
+            try writer.writeIntNative(DBusType, value);
+            cur_pos += @sizeOf(DbusType);
+        },
+        f64 => {
+            try writer.writeAll(std.mem.asBytes(&value));
+            cur_pos += 8;
+        },
+        //String, ObjectPath => 4,
+        //Signature => 1,
+        //Array => 4,
+        //Struct => 8,
+        //Variant => 1,
+        //DictEntry => 8,
+        //UnixFd => 4,
+        else => @compileError(@typeName(DbusType) ++ " is not a D-Bus type"),
+    }
+    return cur_pos;
+}
+
+fn alignOf(comptime DbusType: type) usize {
+    return switch (DbusType) {
+        u8 => 1,
+        bool => 4,
+        i16, u16 => 2,
+        i32, u32 => 4,
+        i64, u64, f64 => 8,
+        //String, ObjectPath => 4,
+        //Signature => 1,
+        //Array => 4,
+        //Struct => 8,
+        //Variant => 1,
+        //DictEntry => 8,
+        //UnixFd => 4,
+        else => @compileError(@typeName(DbusType) ++ " is not a D-Bus type"),
+    };
+}
 
 const MessageType = enum(u8) {
     method_call = 1,
@@ -132,8 +200,8 @@ const MessageFlags = packed struct {
     no_auto_start: bool = false,
     allow_interactive_authorization: bool = false,
     _padding: u5 = 0,
-};
 
-comptime {
-    std.debug.assert(@bitSizeOf(MessageFlags) == 8);
-}
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 8);
+    }
+};
