@@ -53,7 +53,7 @@ pub const Connection = struct {
 
         // Send a Hello message to receive our connection's unique name
         try self.sendMessage(.{
-            .message_type = .method_call,
+            .message_type = .MethodCall,
             .serial = 1, // TODO but this should not be determined by the caller, but tracked as Connection state
         });
 
@@ -151,20 +151,20 @@ fn serializeValue(writer: anytype, position: usize, value: anytype) !usize {
             cur_pos += 4;
         },
         i16, u16, i32, u32, i64, u64 => {
-            try writer.writeIntNative(DBusType, value);
+            try writer.writeIntNative(DbusType, value);
             cur_pos += @sizeOf(DbusType);
         },
         f64 => {
             try writer.writeAll(std.mem.asBytes(&value));
             cur_pos += 8;
         },
-        //String, ObjectPath => 4,
-        //Signature => 1,
-        //Array => 4,
-        //Struct => 8,
-        //Variant => 1,
-        //DictEntry => 8,
-        //UnixFd => 4,
+        //String, ObjectPath => ...
+        //Signature => ...
+        //Array => ...
+        //Struct => ...
+        //Variant => ...
+        //DictEntry => ...
+        //UnixFd => ...
         else => @compileError(@typeName(DbusType) ++ " is not a D-Bus type"),
     }
     return cur_pos;
@@ -189,10 +189,10 @@ fn alignOf(comptime DbusType: type) usize {
 }
 
 const MessageType = enum(u8) {
-    method_call = 1,
-    method_return = 2,
-    @"error" = 3,
-    signal = 4,
+    MethodCall = 1,
+    MethodReturn = 2,
+    Error = 3,
+    Signal = 4,
 };
 
 const MessageFlags = packed struct {
@@ -205,3 +205,70 @@ const MessageFlags = packed struct {
         std.debug.assert(@bitSizeOf(@This()) == 8);
     }
 };
+
+test "serializeValue" { // TODO hook up to "zig build test"
+    var out_buffer: [1024]u8 = undefined;
+
+    var stream = std.io.fixedBufferStream(&out_buffer);
+    const writer = stream.writer();
+
+    comptime const endian = std.Target.current.cpu.arch.endian();
+    const false_value = "\x00\x00\x00\x00";
+    const true_value = switch (endian) {
+        .Little => "\x01\x00\x00\x00",
+        .Big => "\x00\x00\x00\x01",
+    };
+
+    var position: usize = 0;
+    position = try serializeValue(writer, position, false);
+    try std.testing.expectEqual(@as(usize, 4), position);
+    try std.testing.expectEqualSlices(u8, false_value, stream.getWritten());
+
+    stream.reset();
+    position = 0;
+    position = try serializeValue(writer, position, true);
+    try std.testing.expectEqual(@as(usize, 4), position);
+    try std.testing.expectEqualSlices(u8, true_value, stream.getWritten());
+
+    stream.reset();
+    position = 1;
+    position = try serializeValue(writer, position, false);
+    try std.testing.expectEqual(@as(usize, 8), position);
+    try std.testing.expectEqualSlices(u8, "\x00" ** 3 ++ false_value, stream.getWritten());
+
+    stream.reset();
+    position = 1;
+    position = try serializeValue(writer, position, true);
+    try std.testing.expectEqual(@as(usize, 8), position);
+    try std.testing.expectEqualSlices(u8, "\x00" ** 3 ++ true_value, stream.getWritten());
+
+    const u32_0_value = "\x00\x00\x00\x00";
+    const u32_1_value = switch (endian) {
+        .Little => "\x01\x00\x00\x00",
+        .Big => "\x00\x00\x00\x01",
+    };
+
+    stream.reset();
+    position = 0;
+    position = try serializeValue(writer, position, @as(u32, 0));
+    try std.testing.expectEqual(@as(usize, 4), position);
+    try std.testing.expectEqualSlices(u8, u32_0_value, stream.getWritten());
+
+    stream.reset();
+    position = 0;
+    position = try serializeValue(writer, position, @as(u32, 1));
+    try std.testing.expectEqual(@as(usize, 4), position);
+    try std.testing.expectEqualSlices(u8, u32_1_value, stream.getWritten());
+
+    stream.reset();
+    position = 1;
+    position = try serializeValue(writer, position, @as(u32, 0));
+    try std.testing.expectEqual(@as(usize, 8), position);
+    try std.testing.expectEqualSlices(u8, "\x00" ** 3 ++ u32_0_value, stream.getWritten());
+
+    stream.reset();
+    position = 1;
+    position = try serializeValue(writer, position, @as(u32, 1));
+    try std.testing.expectEqual(@as(usize, 8), position);
+    try std.testing.expectEqualSlices(u8, "\x00" ** 3 ++ u32_1_value, stream.getWritten());
+}
