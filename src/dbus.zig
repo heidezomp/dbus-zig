@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const endian = std.Target.current.cpu.arch.endian();
+
 pub const Connection = struct {
     socket: std.net.Stream,
 
@@ -72,22 +74,20 @@ pub const Connection = struct {
             "\x03\x01\x73\x00\x05\x00\x00\x00\x48\x65\x6c\x6c\x6f\x00\x00\x00";
         //try self.socket.writer().writeAll(msg);
 
-        var position: usize = 0;
-        position = try serializeValue(self.socket.writer(), position, @as(u8, 'l'));
-        std.log.debug("new position = {}", .{position});
+        var pos: usize = 0;
+        pos = try serializeValue(self.socket.writer(), pos, @as(u8, switch (endian) {
+            .Little => 'l',
+            .Big => 'B',
+        }));
+        pos = try serializeValue(self.socket.writer(), pos, MessageType.MethodCall.to_byte());
+        pos = try serializeValue(self.socket.writer(), pos, (MessageFlags{}).to_byte());
+        pos = try serializeValue(self.socket.writer(), pos, @as(u8, 1)); // major protocol version
+        pos = try serializeValue(self.socket.writer(), pos, @as(u32, 0)); // message body length
+        pos = try serializeValue(self.socket.writer(), pos, @as(u32, 1)); // message serial number (non-zero)
 
         // Message header
         // TODO doesn't work; try to replicate the above message and write a test for it once it works
 
-        //try self.socket.writer().writeByte(switch (std.Target.current.cpu.arch.endian()) {
-        //    .Little => 'l',
-        //    .Big => 'B',
-        //});
-        //try self.socket.writer().writeByte(@enumToInt(MessageType.METHOD_CALL));
-        //try self.socket.writer().writeByte(0); // flags
-        //try self.socket.writer().writeByte(1); // major protocol version
-        //try self.socket.writer().writeIntNative(u32, 0); // message body length
-        //try self.socket.writer().writeIntNative(u32, 1); // message serial number (non-zero)
         //try self.socket.writer().writeIntNative(u32, 2); // array number of elements
 
         //try self.socket.writer().writeByte(3); // first array element field code: MEMBER
@@ -193,6 +193,10 @@ const MessageType = enum(u8) {
     MethodReturn = 2,
     Error = 3,
     Signal = 4,
+
+    fn to_byte(self: MessageType) u8 {
+        return @enumToInt(self);
+    }
 };
 
 const MessageFlags = packed struct {
@@ -203,6 +207,14 @@ const MessageFlags = packed struct {
 
     comptime {
         std.debug.assert(@bitSizeOf(@This()) == 8);
+    }
+
+    fn to_byte(self: MessageFlags) u8 {
+        const bytes = std.mem.asBytes(&self);
+        comptime {
+            std.debug.assert(bytes.len == 1);
+        }
+        return bytes[0];
     }
 };
 
@@ -216,7 +228,6 @@ test "serializeValue" {
     var stream = std.io.fixedBufferStream(&out_buffer);
     const writer = stream.writer();
 
-    comptime const endian = std.Target.current.cpu.arch.endian();
     const false_value = "\x00\x00\x00\x00";
     const true_value = switch (endian) {
         .Little => "\x01\x00\x00\x00",
