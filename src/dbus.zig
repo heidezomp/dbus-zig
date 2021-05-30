@@ -1,8 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const endian = std.Target.current.cpu.arch.endian();
-
 pub const Connection = struct {
     socket: std.net.Stream,
 
@@ -54,15 +52,12 @@ pub const Connection = struct {
         var self = Connection{ .socket = socket };
 
         // Send a Hello message to receive our connection's unique name
-        try self.sendMessage(.{
-            .message_type = .MethodCall,
-            .serial = 1, // TODO but this should not be determined by the caller, but tracked as Connection state
-        });
+        try self.sendMessage();
 
         return self;
     }
 
-    pub fn sendMessage(self: Connection, message: Message) !void {
+    pub fn sendMessage(self: Connection) !void {
         const msg =
             "\x6c\x01\x00\x01\x00\x00\x00\x00\x01\x00\x00\x00\x6e\x00\x00\x00" ++
             "\x01\x01\x6f\x00\x15\x00\x00\x00\x2f\x6f\x72\x67\x2f\x66\x72\x65" ++
@@ -74,16 +69,17 @@ pub const Connection = struct {
             "\x03\x01\x73\x00\x05\x00\x00\x00\x48\x65\x6c\x6c\x6f\x00\x00\x00";
         //try self.socket.writer().writeAll(msg);
 
-        var pos: usize = 0;
-        pos = try serializeValue(self.socket.writer(), pos, @as(u8, switch (endian) {
+        comptime const endian = std.Target.current.cpu.arch.endian();
+        var ser = serializer(self.socket.writer(), endian); // TODO put a BufferedWriter in between
+        try ser.serialize(@as(u8, switch (endian) {
             .Little => 'l',
             .Big => 'B',
         }));
-        pos = try serializeValue(self.socket.writer(), pos, MessageType.MethodCall.toByte());
-        pos = try serializeValue(self.socket.writer(), pos, (MessageFlags{}).toByte());
-        pos = try serializeValue(self.socket.writer(), pos, @as(u8, 1)); // major protocol version
-        pos = try serializeValue(self.socket.writer(), pos, @as(u32, 0)); // message body length
-        pos = try serializeValue(self.socket.writer(), pos, @as(u32, 1)); // message serial number (non-zero)
+        try ser.serialize(MessageType.MethodCall.toByte());
+        try ser.serialize((MessageFlags{}).toByte());
+        try ser.serialize(@as(u8, 1)); // major protocol version
+        try ser.serialize(@as(u32, 0)); // message body length
+        try ser.serialize(@as(u32, 1)); // message serial number (non-zero)
 
         // Message header
         // TODO doesn't work; try to replicate the above message and write a test for it once it works
@@ -117,114 +113,56 @@ pub const Connection = struct {
     }
 };
 
-const Message = struct { // TODO should a Message struct even exist? maybe just have a serializeMessage function with arguments? or more generic: serializeValue for serializing a single D-Bus value?
-    endian: std.builtin.Endian = std.Target.current.cpu.arch.endian(),
-    message_type: MessageType,
-    flags: MessageFlags = .{},
-    serial: u32,
-};
-
-fn serializeMessage(
-    writer: anytype,
-    message_type: MessageType,
-    message_flags: MessageFlags,
-    serial: u32,
-    header_fields: Array(Struct(.{ Byte, Variant })),
-) void {
-    std.debug.assert(serial != 0);
-}
-
-fn serializeValue(writer: anytype, position: usize, value: anytype) !usize {
-    const T = @TypeOf(value);
-    assertDbusType(T);
-    var cur_pos = std.mem.alignForward(position, alignOf(T));
-    var align_bytes = cur_pos - position;
-    while (align_bytes != 0) : (align_bytes -= 1) {
-        try writer.writeByte(0);
-    }
-    switch (T) {
-        u8 => {
-            try writer.writeByte(value);
-            cur_pos += 1;
-        },
-        bool => {
-            try writer.writeIntNative(u32, @boolToInt(value));
-            cur_pos += 4;
-        },
-        i16, u16, i32, u32, i64, u64 => {
-            try writer.writeIntNative(T, value);
-            cur_pos += @sizeOf(T);
-        },
-        f64 => {
-            try writer.writeAll(std.mem.asBytes(&value));
-            cur_pos += 8;
-        },
-        //String, ObjectPath => ...
-        //Signature => ...
-        //Array => ...
-        //Struct => ...
-        //Variant => ...
-        //DictEntry => ...
-        //UnixFd => ...
-        else => unreachable,
-    }
-    return cur_pos;
-}
-
-fn alignOf(comptime T: type) usize {
-    assertDbusType(T);
-    return switch (T) {
-        u8 => 1,
-        bool => 4,
-        i16, u16 => 2,
-        i32, u32 => 4,
-        i64, u64, f64 => 8,
-        //String, ObjectPath => 4,
-        //Signature => 1,
-        //Array => 4,
-        //Struct => 8,
-        //Variant => 1,
-        //DictEntry => 8,
-        //UnixFd => 4,
-        else => unreachable,
-    };
-}
-
-fn Array(comptime T: type) type {
-    assertDbusType(T);
+pub fn Serializer(comptime Writer: type, endian: std.builtin.Endian) type {
     return struct {
-        elements: []const T,
+        writer: std.io.CountingWriter(Writer),
+
+        const Self = @This();
+
+        pub fn serialize(self: *Self, value: anytype) !void {
+            const T = @TypeOf(value);
+            const writer = self.writer.writer();
+            switch (T) {
+                u8 => {
+                    try writer.writeByte(value);
+                },
+                bool => {
+                    try self.alignForward(4);
+                    try writer.writeInt(u32, @boolToInt(value), endian);
+                },
+                i16, u16, i32, u32, i64, u64 => {
+                    try self.alignForward(@sizeOf(T));
+                    try writer.writeInt(T, value, endian);
+                },
+                f64 => {
+                    try self.alignForward(8);
+                    if (endian == std.Target.current.cpu.arch.endian()) {
+                        try writer.writeAll(std.mem.asBytes(&value));
+                    } else {
+                        var bytes = std.mem.toBytes(value);
+                        std.mem.reverse(u8, &bytes);
+                        try writer.writeAll(&bytes);
+                    }
+                },
+                else => {
+                    // Not a primitive type; assume it has a serialize method
+                    value.serialize(self);
+                },
+            }
+        }
+
+        pub fn alignForward(self: *Self, alignment: usize) !void {
+            var align_bytes = std.mem.alignForward(self.writer.bytes_written, alignment) - self.writer.bytes_written;
+            const writer = self.writer.writer();
+            while (align_bytes != 0) : (align_bytes -= 1) {
+                try writer.writeByte(0);
+            }
+        }
     };
 }
 
-fn assertDbusType(comptime T: type) void {
-    comptime {
-        if (!isDbusType(T)) @compileError(@typeName(T) ++ " is not a D-Bus type");
-    }
-}
-
-fn isDbusType(comptime T: type) bool {
-    return switch (T) {
-        u8,
-        bool,
-        i16,
-        u16,
-        i32,
-        u32,
-        i64,
-        u64,
-        f64,
-        //String,
-        //ObjectPath,
-        //Signature,
-        //Array,
-        //Struct,
-        //Variant,
-        //DictEntry,
-        //UnixFd,
-        => true,
-        else => false,
-    };
+pub fn serializer(writer: anytype, comptime endian: std.builtin.Endian) Serializer(@TypeOf(writer), endian) {
+    return .{ .writer = std.io.countingWriter(writer) };
 }
 
 const MessageType = enum(u8) {
@@ -261,11 +199,16 @@ test {
     std.testing.refAllDecls(@This());
 }
 
-test "serializeValue" {
+test "serialize" {
+    try testSerialize(.Little);
+    try testSerialize(.Big);
+}
+
+fn testSerialize(comptime endian: std.builtin.Endian) !void {
     var out_buffer: [1024]u8 = undefined;
 
     var stream = std.io.fixedBufferStream(&out_buffer);
-    const writer = stream.writer();
+    var ser = serializer(stream.writer(), endian);
 
     const false_value = "\x00\x00\x00\x00";
     const true_value = switch (endian) {
@@ -273,56 +216,61 @@ test "serializeValue" {
         .Big => "\x00\x00\x00\x01",
     };
 
-    var position: usize = 0;
-    position = try serializeValue(writer, position, false);
-    try std.testing.expectEqual(@as(usize, 4), position);
+    stream.reset();
+    ser.writer.bytes_written = 0;
+    try ser.serialize(false);
+    try std.testing.expectEqual(@as(usize, 4), ser.writer.bytes_written);
     try std.testing.expectEqualSlices(u8, false_value, stream.getWritten());
 
     stream.reset();
-    position = 0;
-    position = try serializeValue(writer, position, true);
-    try std.testing.expectEqual(@as(usize, 4), position);
+    ser.writer.bytes_written = 0;
+    try ser.serialize(true);
+    try std.testing.expectEqual(@as(usize, 4), ser.writer.bytes_written);
     try std.testing.expectEqualSlices(u8, true_value, stream.getWritten());
 
     stream.reset();
-    position = 1;
-    position = try serializeValue(writer, position, false);
-    try std.testing.expectEqual(@as(usize, 8), position);
+    ser.writer.bytes_written = 1;
+    try ser.serialize(false);
+    try std.testing.expectEqual(@as(usize, 8), ser.writer.bytes_written);
     try std.testing.expectEqualSlices(u8, "\x00" ** 3 ++ false_value, stream.getWritten());
 
     stream.reset();
-    position = 1;
-    position = try serializeValue(writer, position, true);
-    try std.testing.expectEqual(@as(usize, 8), position);
+    ser.writer.bytes_written = 1;
+    try ser.serialize(true);
+    try std.testing.expectEqual(@as(usize, 8), ser.writer.bytes_written);
     try std.testing.expectEqualSlices(u8, "\x00" ** 3 ++ true_value, stream.getWritten());
 
-    const u32_0_value = "\x00\x00\x00\x00";
-    const u32_1_value = switch (endian) {
-        .Little => "\x01\x00\x00\x00",
-        .Big => "\x00\x00\x00\x01",
+    const u16_value = switch (endian) {
+        .Little => "\x34\x12",
+        .Big => "\x12\x34",
     };
 
     stream.reset();
-    position = 0;
-    position = try serializeValue(writer, position, @as(u32, 0));
-    try std.testing.expectEqual(@as(usize, 4), position);
-    try std.testing.expectEqualSlices(u8, u32_0_value, stream.getWritten());
+    ser.writer.bytes_written = 0;
+    try ser.serialize(@as(u16, 0x1234));
+    try std.testing.expectEqual(@as(usize, 2), ser.writer.bytes_written);
+    try std.testing.expectEqualSlices(u8, u16_value, stream.getWritten());
 
     stream.reset();
-    position = 0;
-    position = try serializeValue(writer, position, @as(u32, 1));
-    try std.testing.expectEqual(@as(usize, 4), position);
-    try std.testing.expectEqualSlices(u8, u32_1_value, stream.getWritten());
+    ser.writer.bytes_written = 1;
+    try ser.serialize(@as(u16, 0x1234));
+    try std.testing.expectEqual(@as(usize, 4), ser.writer.bytes_written);
+    try std.testing.expectEqualSlices(u8, "\x00" ++ u16_value, stream.getWritten());
+
+    const float_value = switch (endian) {
+        .Little => "\x00\x00\x00\x00\x00\x00\xf0\x3f",
+        .Big => "\x3f\xf0\x00\x00\x00\x00\x00\x00",
+    };
 
     stream.reset();
-    position = 1;
-    position = try serializeValue(writer, position, @as(u32, 0));
-    try std.testing.expectEqual(@as(usize, 8), position);
-    try std.testing.expectEqualSlices(u8, "\x00" ** 3 ++ u32_0_value, stream.getWritten());
+    ser.writer.bytes_written = 0;
+    try ser.serialize(@as(f64, 1.0));
+    try std.testing.expectEqual(@as(usize, 8), ser.writer.bytes_written);
+    try std.testing.expectEqualSlices(u8, float_value, stream.getWritten());
 
     stream.reset();
-    position = 1;
-    position = try serializeValue(writer, position, @as(u32, 1));
-    try std.testing.expectEqual(@as(usize, 8), position);
-    try std.testing.expectEqualSlices(u8, "\x00" ** 3 ++ u32_1_value, stream.getWritten());
+    ser.writer.bytes_written = 1;
+    try ser.serialize(@as(f64, 1.0));
+    try std.testing.expectEqual(@as(usize, 16), ser.writer.bytes_written);
+    try std.testing.expectEqualSlices(u8, "\x00" ** 7 ++ float_value, stream.getWritten());
 }
