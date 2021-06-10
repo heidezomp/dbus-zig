@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const expectEqualSlices = testing.expectEqualSlices;
 const expectEqual = testing.expectEqual;
+const expectError = testing.expectError;
 
 pub const Transport = enum {
     /// Unix domain sockets
@@ -42,9 +43,11 @@ pub const UnixAddress = union(enum) {
 
 pub const Address = union(Transport) {
     unix: UnixAddress,
-    launchd: void, // TODO
+    /// Environment variable containing the path of the unix domain
+    /// socket for the launchd created dbus-daemon
+    launchd: []const u8,
     /// No extra information provided
-    systemd: void, // TODO
+    systemd: void,
     tcp: void, // TODO
     nonce_tcp: void, // TODO
     unixexec: void, // TODO
@@ -72,6 +75,12 @@ pub const Parser = struct {
 
         // Start parsing after the :
         const parts = address[transport.prefix().len..];
+        if (parts.len == 0) {
+            switch (transport) {
+                .systemd => return Address.systemd,
+                else => return error.ExpectedKeyValuePair,
+            }
+        }
 
         var part_iter = std.mem.split(parts, ",");
         while (part_iter.next()) |part| {
@@ -99,6 +108,16 @@ pub const Parser = struct {
                         return error.InvalidKey;
                     }
                 },
+                .launchd => {
+                    if (part_iter.next() != null) return error.InvalidUnixAddress;
+
+                    if (std.mem.eql(u8, "env", key)) {
+                        return Address{ .launchd = value };
+                    } else {
+                        return error.InvalidKey;
+                    }
+                },
+                .systemd => return error.InvalidSystemdAddress,
                 else => return error.NotImplemented,
             }
         }
@@ -107,10 +126,46 @@ pub const Parser = struct {
     }
 };
 
-test "parse test address" {
+test "parse unix address 1" {
     const address = "unix:path=/tmp/dbus-test";
     var parser = try Parser.init(address);
 
     try expectEqualSlices(u8, "/tmp/dbus-test", (try parser.nextAddress()).?.unix.path);
     try expectEqual(@as(?Address, null), try parser.nextAddress());
+}
+
+test "parse unix address 2" {
+    const address = "unix:invalidkey=value";
+    var parser = try Parser.init(address);
+
+    try expectError(error.InvalidKey, parser.nextAddress());
+}
+
+test "parse systemd address 1" {
+    const address = "systemd:";
+    var parser = try Parser.init(address);
+
+    try expectEqual(Address.systemd, (try parser.nextAddress()).?);
+}
+
+test "parse systemd address 2" {
+    const address = "systemd:invalidkey=value";
+    var parser = try Parser.init(address);
+
+    try expectError(error.InvalidSystemdAddress, parser.nextAddress());
+}
+
+test "parse launchd address 1" {
+    const address = "launchd:env=ENVIRONMENT_VARIABLE";
+    var parser = try Parser.init(address);
+
+    try expectEqualSlices(u8, "ENVIRONMENT_VARIABLE", (try parser.nextAddress()).?.launchd);
+    try expectEqual(@as(?Address, null), try parser.nextAddress());
+}
+
+test "parse launchd address 2" {
+    const address = "launchd:";
+    var parser = try Parser.init(address);
+
+    try expectError(error.ExpectedKeyValuePair, parser.nextAddress());
 }
