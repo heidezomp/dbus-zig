@@ -53,6 +53,14 @@ pub const TcpAddress = struct {
     family: ?SocketFamily,
 };
 
+pub const NonceTcpAddress = struct {
+    host: []const u8,
+    bind: []const u8,
+    port: u16,
+    family: ?SocketFamily,
+    noncefile: ?[]const u8,
+};
+
 pub const Address = union(Transport) {
     unix: UnixAddress,
     /// Environment variable containing the path of the unix domain
@@ -61,7 +69,7 @@ pub const Address = union(Transport) {
     /// No extra information provided
     systemd: void,
     tcp: TcpAddress,
-    nonce_tcp: void, // TODO
+    nonce_tcp: NonceTcpAddress,
     unixexec: void, // TODO
     autolaunch: void, // TODO
 };
@@ -99,6 +107,7 @@ pub const Parser = struct {
             bind: ?[]const u8 = null,
             port: ?u16 = null,
             family: ?SocketFamily = null,
+            noncefile: ?[]const u8 = null,
         } = .{};
 
         var part_iter = std.mem.split(parts, ",");
@@ -150,6 +159,23 @@ pub const Parser = struct {
                         return error.InvalidKey;
                     }
                 },
+                // TODO merging this with tcp results in a
+                // segmentation fault when compiling with stage1
+                .nonce_tcp => {
+                    if (std.mem.eql(u8, "host", key)) {
+                        tcp_parse_state.host = value;
+                    } else if (std.mem.eql(u8, "bind", key)) {
+                        tcp_parse_state.bind = value;
+                    } else if (std.mem.eql(u8, "port", key)) {
+                        tcp_parse_state.port = std.fmt.parseInt(u16, value, 10) catch return error.InvalidTcpPort;
+                    } else if (std.mem.eql(u8, "family", key)) {
+                        tcp_parse_state.family = std.meta.stringToEnum(SocketFamily, value);
+                    } else if (std.mem.eql(u8, "noncefile", key)) {
+                        tcp_parse_state.noncefile = value;
+                    } else {
+                        return error.InvalidKey;
+                    }
+                },
                 else => return error.NotImplemented,
             }
         }
@@ -161,6 +187,13 @@ pub const Parser = struct {
                 .bind = tcp_parse_state.bind orelse tcp_parse_state.host.?,
                 .port = tcp_parse_state.port orelse 0,
                 .family = tcp_parse_state.family,
+            } },
+            .nonce_tcp => return Address{ .nonce_tcp = .{
+                .host = tcp_parse_state.host orelse return error.MissingTcpHost,
+                .bind = tcp_parse_state.bind orelse tcp_parse_state.host.?,
+                .port = tcp_parse_state.port orelse 0,
+                .family = tcp_parse_state.family,
+                .noncefile = tcp_parse_state.noncefile,
             } },
             else => unreachable, // We return error.NotImplemented in all other switch prongs
         }
@@ -247,5 +280,18 @@ test "parse tcp address 4" {
     var parser = try Parser.init(address);
 
     try expectError(error.MissingTcpHost, parser.nextAddress());
+    try expectEqual(@as(?Address, null), try parser.nextAddress());
+}
+
+test "parse nonce_tcp address 1" {
+    const address = "nonce-tcp:host=127.0.0.1,noncefile=/tmp/test";
+    var parser = try Parser.init(address);
+    const parsed = (try parser.nextAddress()).?.nonce_tcp;
+
+    try expectEqualStrings("127.0.0.1", parsed.host);
+    try expectEqualStrings("127.0.0.1", parsed.bind);
+    try expectEqual(@as(u16, 0), parsed.port);
+    try expectEqual(@as(?SocketFamily, null), parsed.family);
+    try expectEqualStrings("/tmp/test", parsed.noncefile.?);
     try expectEqual(@as(?Address, null), try parser.nextAddress());
 }
